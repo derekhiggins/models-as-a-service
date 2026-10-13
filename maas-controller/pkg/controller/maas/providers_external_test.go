@@ -382,6 +382,86 @@ func TestExternalModel_GetModelEndpoint_FromGateway(t *testing.T) {
 	}
 }
 
+func TestExternalModel_GetModelEndpoint_ResolvedGateway(t *testing.T) {
+	hostnameType := gatewayapiv1.HostnameAddressType
+	ipType := gatewayapiv1.IPAddressType
+	for _, tt := range []struct {
+		name      string
+		listener  string
+		addresses []gatewayapiv1.GatewayStatusAddress
+		missing   bool
+		want      string
+		wantError bool
+	}{
+		{name: "listener", listener: "tenant.example.com", want: "https://tenant.example.com"},
+		{name: "hostname address", addresses: []gatewayapiv1.GatewayStatusAddress{
+			{Type: &ipType, Value: "192.0.2.1"},
+			{Type: &hostnameType, Value: "tenant.example.com"},
+		}, want: "https://tenant.example.com"},
+		{name: "IP address", addresses: []gatewayapiv1.GatewayStatusAddress{
+			{Type: &ipType, Value: "192.0.2.1"},
+		}, want: "https://192.0.2.1"},
+		{name: "missing gateway", missing: true, wantError: true},
+		{name: "no endpoint", wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+			model.Status.HTTPRouteGatewayName = "tenant-gateway"
+			model.Status.HTTPRouteGatewayNamespace = "tenant-ingress"
+			objects := []client.Object{model,
+				newGatewayWithHostname("default-gateway", "default-ingress", "default.example.com"),
+				newGatewayWithHostname("tenant-gateway", "default-ingress", "wrong-namespace.example.com"),
+			}
+			if !tt.missing {
+				gateway := newGatewayWithHostname("tenant-gateway", "tenant-ingress", tt.listener)
+				if tt.listener == "" {
+					gateway.Spec.Listeners = nil
+				}
+				gateway.Status.Addresses = tt.addresses
+				objects = append(objects, gateway)
+			}
+			r, _ := newTestReconciler(objects...)
+			r.GatewayName = "default-gateway"
+			r.GatewayNamespace = "default-ingress"
+			handler := &externalModelHandler{r: r}
+			endpoint, err := handler.GetModelEndpoint(t.Context(), zap.New(zap.UseDevMode(true)), model)
+			if tt.wantError {
+				if err == nil || endpoint != "" || !strings.Contains(err.Error(), "tenant-ingress/tenant-gateway") {
+					t.Fatalf("GetModelEndpoint = %q, %v, want resolved gateway error", endpoint, err)
+				}
+				return
+			}
+			if err != nil || endpoint != tt.want {
+				t.Fatalf("GetModelEndpoint = %q, %v, want %q", endpoint, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestExternalModel_Status_ResolvedGatewayWithoutRouteHostnames(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "", "")
+	inferenceEM := newInferenceExternalModelCR("gpt-4o", "default", "openai-provider")
+	const gatewayName, gatewayNS = "tenant-gateway", "tenant-ingress"
+	tenant := defaultTestAITenant()
+	tenant.Name = "custom-tenant"
+	tenant.Status.GatewayRef = maasv1alpha1.TenantGatewayRef{Name: gatewayName, Namespace: gatewayNS}
+	route := newHTTPRouteWithGateway("gpt-4o", "default", gatewayName, gatewayNS)
+	gateway := newGatewayWithHostname(gatewayName, gatewayNS, "tenant.example.com")
+	r, _ := newTestReconcilerWithMapper(model, inferenceEM, tenant, route, gateway)
+	handler := &externalModelHandler{r: r}
+	log := zap.New(zap.UseDevMode(true))
+	if err := handler.ReconcileRoute(t.Context(), log, model); err != nil {
+		t.Fatalf("ReconcileRoute: %v", err)
+	}
+	if model.Status.ResolvedTenantRef != tenant.Name || model.Status.HTTPRouteGatewayName != gatewayName || model.Status.HTTPRouteGatewayNamespace != gatewayNS {
+		t.Fatalf("incorrect resolved tenant/gateway: %+v", model.Status)
+	}
+	endpoint, ready, err := handler.Status(t.Context(), log, model)
+	if err != nil || !ready || endpoint != "https://tenant.example.com" {
+		t.Fatalf("Status = %q, %v, %v, want resolved gateway endpoint and ready", endpoint, ready, err)
+	}
+}
+
 func TestExternalModel_CleanupOnDelete(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
 

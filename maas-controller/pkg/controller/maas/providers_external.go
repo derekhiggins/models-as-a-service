@@ -321,8 +321,13 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 		return fmt.Sprintf("https://%s", model.Status.HTTPRouteHostnames[0]), nil
 	}
 
-	gatewayName := h.r.gatewayName()
-	gatewayNS := h.r.gatewayNamespace()
+	// Route validation records the tenant-aware gateway, as for LLMInferenceService.
+	gatewayName := model.Status.HTTPRouteGatewayName
+	gatewayNS := model.Status.HTTPRouteGatewayNamespace
+	if gatewayName == "" {
+		gatewayName = h.r.gatewayName()
+		gatewayNS = h.r.gatewayNamespace()
+	}
 	gateway := &gatewayapiv1.Gateway{}
 	key := client.ObjectKey{Name: gatewayName, Namespace: gatewayNS}
 	if err := h.r.Get(ctx, key, gateway); err != nil {
