@@ -137,15 +137,15 @@ func TestAITenantResponsesSchema(t *testing.T) {
 					t.Fatal("retention did not survive pruning and conversion")
 				}
 			}
-			copy := tenant.DeepCopy()
-			if !reflect.DeepEqual(&tenant, copy) {
+			cloned := tenant.DeepCopy()
+			if !reflect.DeepEqual(&tenant, cloned) {
 				t.Fatal("deep copy lost Responses fields")
 			}
-			copy.Spec.Responses.Enabled = !wantEnabled
-			if copy.Spec.Responses.Retention != nil {
-				copy.Spec.Responses.Retention.MaxAge = "1s"
+			cloned.Spec.Responses.Enabled = !wantEnabled
+			if cloned.Spec.Responses.Retention != nil {
+				cloned.Spec.Responses.Retention.MaxAge = "1s"
 			}
-			if tenant.Spec.Responses.Enabled != wantEnabled || reflect.DeepEqual(tenant.Spec.Responses, copy.Spec.Responses) {
+			if tenant.Spec.Responses.Enabled != wantEnabled || reflect.DeepEqual(tenant.Spec.Responses, cloned.Spec.Responses) {
 				t.Fatal("deep copy shares Responses pointers")
 			}
 			if retention, ok := tt.responses["retention"].(map[string]any); ok && tenant.Spec.Responses.Retention.MaxAge != retention["maxAge"] {
